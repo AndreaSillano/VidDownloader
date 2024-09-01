@@ -85,6 +85,9 @@ This will create a .app bundle in the dist directory. You can find the built app
 /dist/VidDowloader.exe
 ```
 
+# Known Issues
+- Sometimes during conversions percetages reach 99% and stops althought the video is correctly converted. If this happens just close the program.
+
 ## Contributing
 
 Contributions are welcome! If you have any ideas, suggestions, or issues, please feel free to open an issue or create a pull request. We appreciate all forms of contributions, whether it's improving documentation, fixing bugs, or adding new features.
