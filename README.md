@@ -95,6 +95,21 @@ Contributions are welcome! If you have any ideas, suggestions, or issues, please
 
 This project is licensed under the MIT License - see the [LICENSE](./LICENSE) file for details.
 
+## Legal and Ethical Considerations
+
+When using this software, please be mindful of the following legal and ethical considerations:
+
+- **Copyright Compliance**: Ensure you have the right to download and use the content from YouTube. This software is intended for personal use and educational purposes only. Downloading copyrighted material without permission may violate copyright laws.
+
+- **YouTube Terms of Service**: Adhere to YouTube's Terms of Service and any other relevant agreements. The use of this software for purposes that contravene YouTube's policies, such as downloading videos for redistribution or commercial use, is not supported.
+
+- **Local Laws**: Be aware of and comply with any local laws or regulations related to media downloading and content use in your jurisdiction. The responsibility for ensuring compliance with these laws rests with the user.
+
+- **Ethical Use**: Use this software responsibly and ethically. Avoid using it for purposes that could harm content creators or violate their rights.
+
+By using this software, you agree to adhere to these guidelines and accept responsibility for your own actions regarding the use of downloaded content.
+
+
 ## Acknowledgements
 
 
