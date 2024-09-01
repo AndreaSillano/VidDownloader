@@ -248,6 +248,7 @@ def download_video():
                 convert_to_mp3_from_mp4(output_file, folder_path)
 
             download_button.configure(state="normal")
+            download_button.configure(text = "Download")
             folder_button.configure(state="normal")
             fetch_info_button.configure(state="normal")
             resolution_combobox.configure(state="normal")
