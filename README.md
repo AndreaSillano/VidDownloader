@@ -1,6 +1,8 @@
 # VidDownloader
 
 VVidDownloader is a simple desktop application that acts as a UI wrapper for `pytube` and `pytubefix`, making it easy to download YouTube videos and audio. The application offers an intuitive interface built with `customtkinter`, allowing users to download and convert media files without needing to interact with the command line. It supports various resolutions and formats, utilizing `ffmpeg` for media conversion tasks.
+
+
 <img src="https://github.com/AndreaSillano/VidDownloader/blob/main/images/exampleImage.png" width="50%" height="50%">
 
 ## Features
