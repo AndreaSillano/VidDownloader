@@ -1,3 +1,4 @@
 dist
 .eggs
 build
+.DS_store

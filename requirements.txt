@@ -1,0 +1,4 @@
+pytube
+pytubefix
+customtkinter
+requests
