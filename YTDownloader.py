@@ -263,17 +263,19 @@ def download_video():
         reset_ui()
         append_to_console(f"Error: {str(e)}", error=True)
 
-def enqueue_output(out,stdout, queue):
-    print(out.readline())
+def enqueue_output(out, stdout, queue):
+    
     for line in iter(out.readline, b''):
+        print(line)
         queue.put(line)
-    #print(stderr)
+    print(stdout)
     out.close()
 
 def convert_to_mp4_from_webm(webm_file, folder_path):
     append_to_console("Converting to MP4...")
     append_to_console("It may take a while...")
     root.update_idletasks()
+    old_percetage = -1
     
     mp4_file = webm_file.replace('.webm', '.mp4')
     mp4_file = get_unique_filename(os.path.join(folder_path, mp4_file))
@@ -296,7 +298,6 @@ def convert_to_mp4_from_webm(webm_file, folder_path):
             line = q.get_nowait()
             print(line)
         except queue.Empty:
-            
             if process.poll() is not None:  # Process has finished
                 break
             if cancel_flag.is_set():  # Check if cancellation was requested
@@ -321,7 +322,9 @@ def convert_to_mp4_from_webm(webm_file, folder_path):
                 hours, minutes, seconds = map(float, time_str.split(":"))
                 current_seconds = hours * 3600 + minutes * 60 + seconds
                 percentage = int((current_seconds / total_duration) * 100)
-                append_to_console(f"Conversion Progress: {percentage}%")
+                if percentage != old_percetage:
+                    append_to_console(f"Conversion Progress: {percentage}%")
+                old_percetage = percentage
 
     process.wait()
 
@@ -340,6 +343,7 @@ def convert_to_mp3_from_webm(webm_file, folder_path):
     append_to_console("Converting to MP3...")
     append_to_console("It may take a while...")
     root.update_idletasks()
+    old_percetage = -1
     
     mp3_file = webm_file.replace('.webm', '.mp3')
     mp3_file = get_unique_filename(os.path.join(folder_path, mp3_file))
@@ -386,7 +390,9 @@ def convert_to_mp3_from_webm(webm_file, folder_path):
                 hours, minutes, seconds = map(float, time_str.split(":"))
                 current_seconds = hours * 3600 + minutes * 60 + seconds
                 percentage = int((current_seconds / total_duration) * 100)
-                append_to_console(f"Conversion Progress: {percentage}%")
+                if percentage != old_percetage:
+                    append_to_console(f"Conversion Progress: {percentage}%")
+                old_percetage = percentage
 
     process.wait()
     if os.path.exists(mp3_file):
@@ -399,6 +405,7 @@ def convert_to_mp3_from_mp4(mp4_file,folder_path):
     append_to_console("Converting to MP3...")
     append_to_console("It may take a while...")
     root.update_idletasks()
+    old_percetage = -1
     
     mp3_file = mp4_file.replace('.mp4', '.mp3')
     mp3_file = get_unique_filename(os.path.join(folder_path, mp4_file))
@@ -444,7 +451,9 @@ def convert_to_mp3_from_mp4(mp4_file,folder_path):
                 hours, minutes, seconds = map(float, time_str.split(":"))
                 current_seconds = hours * 3600 + minutes * 60 + seconds
                 percentage = int((current_seconds / total_duration) * 100)
-                append_to_console(f"Conversion Progress: {percentage}%")
+                if percentage != old_percetage:
+                    append_to_console(f"Conversion Progress: {percentage}%")
+                old_percetage = percentage
 
     process.wait()
     if os.path.exists(mp3_file):
