@@ -1,4 +1,4 @@
 pytube==15.0.0
 pytubefix==6.13.1
 customtkinter==5.2.2
-requests==2.25.1
+requests==2.32.0
