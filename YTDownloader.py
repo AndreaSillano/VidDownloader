@@ -35,11 +35,11 @@ def fetch_video_info():
     if not url:
         append_to_console("Error: Please enter a YouTube URL.", error=True)
         return
-    
+
     try:
         append_to_console("Fetching video information. Please wait...")
         yt = YouTube(url)
-        
+
         # Display the video thumbnail
         img_url = yt.thumbnail_url
         response = requests.get(img_url)
@@ -51,7 +51,7 @@ def fetch_video_info():
         thumbnail_label.image = thumbnail_image
         thumbnail_label.configure(text="")
 
-        
+
 
         # Display video name, duration and size
         video_name = truncate_text(yt.title)
@@ -59,19 +59,19 @@ def fetch_video_info():
         video_duration = yt.length
         minutes, seconds = divmod(video_duration, 60)
         duration_label.configure(text=f"Duration: {minutes:02}:{seconds:02}")
-        
+
         # Fetch and display resolutions
         if video_audio_var.get() == "Video":
             streams = yt.streams.order_by('resolution')
-            
+
             stream_size = streams[0].filesize
             if stream_size < 1024 * 1024:
                 size_label.configure(text=f"Download size: {stream_size // 1024} KB")
             else:
                 size_label.configure(text=f"Download size: {stream_size // (1024 * 1024)} MB")
 
-            
-            #resolutions = [stream.resolution for stream in streams if stream.resolution] 
+
+            #resolutions = [stream.resolution for stream in streams if stream.resolution]
             #resolutions = list(dict.fromkeys(resolutions))  # Remove duplicates while preserving order
             resolutions = []
             for stream in streams:
@@ -91,7 +91,7 @@ def fetch_video_info():
             # Disable the resolution combobox for audio-only
             # Fetch audio-only streams
             streams = yt.streams.filter(only_audio=True).order_by('abr')
-            
+
             stream_size = streams[0].filesize
             if stream_size < 1024 * 1024:
                 size_label.configure(text=f"Download size: {stream_size // 1024} KB")
@@ -106,7 +106,7 @@ def fetch_video_info():
                         audio_bitrates.append(f"{stream.abr} (WebM - Conversion Needed)")
                     else:
                         audio_bitrates.append(stream.abr)
-            
+
             # Update the combobox and notify the user
             if audio_bitrates:
                 resolution_combobox.configure(values=audio_bitrates)
@@ -115,10 +115,10 @@ def fetch_video_info():
                 append_to_console("Audio bitrates fetched! Select one to proceed.")
             else:
                 append_to_console("Error: No audio streams found for this URL.", error=True)
-                
+
         # Show the info_frame
         info_frame.grid(row=4, column=0, columnspan=3, padx=10, pady=10, sticky="nsew")
-        
+
     except Exception as e:
         append_to_console(f"Error: {str(e)}", error=True)
 
@@ -145,7 +145,7 @@ def reset_ui():
 
     download_button.configure(state="disabled")
     info_frame.grid_forget()  # Hide info_frame
-   
+
 def on_video_audio_change(value):
     reset_ui()
 
@@ -155,15 +155,15 @@ def get_unique_filename(filepath):
     """
     if not os.path.exists(filepath):
         return filepath
-    
+
     base, ext = os.path.splitext(filepath)
     counter = 1
     new_filepath = f"{base}_{counter}{ext}"
-    
+
     while os.path.exists(new_filepath):
         counter += 1
         new_filepath = f"{base}_{counter}{ext}"
-    
+
     return new_filepath
 
 def toggle_download():
@@ -173,12 +173,12 @@ def toggle_download():
         cancel_flag.clear()
         download_thread = threading.Thread(target=download_video)
         download_thread.start()
-        
+
     else:
         cancel_flag.set()  # Signal cancellation
         if download_thread and download_thread.is_alive():
             download_thread.join(timeout=5)
-        
+
         #reset_ui()
         download_button.configure(state="normal")
         folder_button.configure(state="normal")
@@ -192,11 +192,11 @@ def download_video():
     res = resolution_combobox.get().split()[0] if video_audio_var.get() == "Video" else None
     abr = resolution_combobox.get().split()[0] if video_audio_var.get() != "Video" else None
     folder_path = folder_entry.get()
-    
+
     if not url:
         append_to_console("Error: Please enter a YouTube URL.", error=True)
         return
-    
+
     if not folder_path:
         append_to_console("Error: Please select a download folder.", error=True)
         return
@@ -216,7 +216,7 @@ def download_video():
         else:
             stream = yt.streams.filter(only_audio=True, abr=abr).first()
             quality = abr
-        
+
         if stream:
             append_to_console("Downloading...")
             root.update_idletasks()
@@ -225,7 +225,7 @@ def download_video():
             base_filename = stream.default_filename.replace(f".{file_extension}", "")
             custom_filename = f"{base_filename}_{quality}.{file_extension}"
             unique_filename = get_unique_filename(os.path.join(folder_path, custom_filename))
-            
+
             # Perform the download with the new filename
             output_file = stream.download(output_path=folder_path, filename=unique_filename)
             if cancel_flag.is_set():  # Check if cancellation was requested
@@ -235,9 +235,10 @@ def download_video():
                     os.remove(output_file)
                 #reset_ui()
                 return
-                    
+
             append_to_console("Download complete!")
-            
+
+
             if output_file.endswith('.webm') and video_audio_var.get() == "Video":
                 convert_to_mp4_from_webm(output_file, folder_path)
 
@@ -254,17 +255,17 @@ def download_video():
             resolution_combobox.configure(state="normal")
             url_entry.configure(state="normal")
             folder_entry.configure(state="normal")
-        
+
         else:
             append_to_console(f"Error: Resolution {res} not available for this video.", error=True)
             reset_ui()
-            
+
     except Exception as e:
         reset_ui()
         append_to_console(f"Error: {str(e)}", error=True)
 
 def enqueue_output(out, stdout, queue):
-    
+
     for line in iter(out.readline, b''):
         print(line)
         queue.put(line)
@@ -276,13 +277,13 @@ def convert_to_mp4_from_webm(webm_file, folder_path):
     append_to_console("It may take a while...")
     root.update_idletasks()
     old_percetage = -1
-    
+
     mp4_file = webm_file.replace('.webm', '.mp4')
     mp4_file = get_unique_filename(os.path.join(folder_path, mp4_file))
 
     total_duration = get_total_duration(webm_file)
 
-    
+
     command = [
         FFMPEG_BIN, '-fflags', '+genpts',
         '-i', webm_file, '-r', '60', mp4_file,
@@ -304,7 +305,7 @@ def convert_to_mp4_from_webm(webm_file, folder_path):
                 process.terminate()
                 append_to_console("Conversion stopped.")
                 download_button.configure(text="Download")
-                
+
                 if os.path.exists(mp4_file):
                     os.remove(mp4_file)
                 if os.path.exists(webm_file):
@@ -344,17 +345,17 @@ def convert_to_mp3_from_webm(webm_file, folder_path):
     append_to_console("It may take a while...")
     root.update_idletasks()
     old_percetage = -1
-    
+
     mp3_file = webm_file.replace('.webm', '.mp3')
     mp3_file = get_unique_filename(os.path.join(folder_path, mp3_file))
     total_duration = get_total_duration(webm_file)
-    
+
     command = [
         FFMPEG_BIN,
         '-i', webm_file,
         mp3_file
     ]
-    
+
     process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
     # Create a queue to hold stdout and stderr lines
@@ -372,7 +373,7 @@ def convert_to_mp3_from_webm(webm_file, folder_path):
                 process.terminate()
                 append_to_console("Conversion stopped.")
                 download_button.configure(text="Download")
-                
+
                 if os.path.exists(mp3_file):
                     os.remove(mp3_file)
                 if os.path.exists(webm_file):
@@ -406,17 +407,17 @@ def convert_to_mp3_from_mp4(mp4_file,folder_path):
     append_to_console("It may take a while...")
     root.update_idletasks()
     old_percetage = -1
-    
+
     mp3_file = mp4_file.replace('.mp4', '.mp3')
     mp3_file = get_unique_filename(os.path.join(folder_path, mp4_file))
     total_duration = get_total_duration(mp4_file)
-    
+
     command = [
         FFMPEG_BIN,
         '-i', mp4_file,
         mp3_file
     ]
-    
+
     process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
     # Create a queue to hold stdout and stderr lines
@@ -434,7 +435,7 @@ def convert_to_mp3_from_mp4(mp4_file,folder_path):
                 process.terminate()
                 append_to_console("Conversion stopped.")
                 download_button.configure(text="Download")
-                
+
                 if os.path.exists(mp3_file):
                     os.remove(mp3_file)
                 if os.path.exists(mp4_file):
@@ -470,12 +471,12 @@ def on_progress_callback(stream, chunk, bytes_remaining):
 
 def append_to_console(message, error=False):
     console_text.configure(state="normal")
-    
+
     if error:
         console_text.insert(ctk.END, message + "\n", "error")
     else:
         console_text.insert(ctk.END, message + "\n")
-    
+
     console_text.tag_config("error", foreground="red")
     console_text.configure(state="disabled")
     console_text.yview(ctk.END)
@@ -571,4 +572,3 @@ root.grid_rowconfigure(9, weight=1)  # Allow console row to expand
 info_frame.grid_forget()
 # Run the application
 root.mainloop()
-
