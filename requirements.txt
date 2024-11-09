@@ -3,4 +3,4 @@ pytubefix==8.3.0
 customtkinter==5.2.2
 requests==2.32.0
 pillow==10.4.0
-setuptools
+setuptools==70.3.0
