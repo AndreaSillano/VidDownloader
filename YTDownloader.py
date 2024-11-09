@@ -47,7 +47,8 @@ def fetch_video_info():
         img = Image.open(img_data)
         img = img.resize((160, 90), Image.LANCZOS)
         thumbnail_image = ImageTk.PhotoImage(img)
-        thumbnail_label.configure(image=thumbnail_image)
+        tk_img = ctk.CTkImage(img, size=(160,90))
+        thumbnail_label.configure(image=tk_img)
         thumbnail_label.image = thumbnail_image
         thumbnail_label.configure(text="")
 
@@ -238,15 +239,18 @@ def download_video():
 
             append_to_console("Download complete!")
 
+            if os.path.exists(FFMPEG_BIN) and os.path.exists(FFPROBE_BIN):
+                if output_file.endswith('.webm') and video_audio_var.get() == "Video":
+                    convert_to_mp4_from_webm(output_file, folder_path)
 
-            if output_file.endswith('.webm') and video_audio_var.get() == "Video":
-                convert_to_mp4_from_webm(output_file, folder_path)
+                elif output_file.endswith('.webm') and video_audio_var.get() != "Video":
+                    convert_to_mp3_from_webm(output_file, folder_path)
 
-            elif output_file.endswith('.webm') and video_audio_var.get() != "Video":
-                convert_to_mp3_from_webm(output_file, folder_path)
+                elif output_file.endswith('.mp4') and video_audio_var.get() != "Video":
+                    convert_to_mp3_from_mp4(output_file, folder_path)
+            else:
+                append_to_console("Missing FFMPEG-FFPROBE. Skipping Conversion", error=True)
 
-            elif output_file.endswith('.mp4') and video_audio_var.get() != "Video":
-                convert_to_mp3_from_mp4(output_file, folder_path)
 
             download_button.configure(state="normal")
             download_button.configure(text = "Download")
@@ -259,9 +263,11 @@ def download_video():
         else:
             append_to_console(f"Error: Resolution {res} not available for this video.", error=True)
             reset_ui()
-
+            download_button.configure(state="normal")
     except Exception as e:
         reset_ui()
+        download_button.configure(state="normal")
+
         append_to_console(f"Error: {str(e)}", error=True)
 
 def enqueue_output(out, stdout, queue):
@@ -527,6 +533,7 @@ info_frame.grid_columnconfigure(0, weight=1)
 info_frame.grid_columnconfigure(1, weight=1)
 
 # Create and place the widgets within info_frame
+
 thumbnail_label = ctk.CTkLabel(info_frame, text="Thumbnail Placeholder", anchor="center")
 thumbnail_label.grid(row=0, column=0, rowspan=3, padx=10, pady=10, sticky="nsew")
 
