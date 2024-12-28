@@ -20,7 +20,7 @@ OPTIONS = {
 
 setup(
     name="VidDownloader",
-    version="0.1",
+    version="0.2",
     app=APP,
     data_files=DATA_FILES,
     options={'py2app': OPTIONS},
