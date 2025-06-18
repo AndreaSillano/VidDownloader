@@ -2,3 +2,6 @@ dist
 .eggs
 build
 .DS_store
+VidDownloader.toml
+build.sh
+YTDownloaderV2.spec

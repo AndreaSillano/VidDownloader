@@ -52,38 +52,6 @@ Start the application by running:
 python3 YTDownloader.py
 ```
 
-# Building Executables
-## MacOS
-To create a standalone macOS application, you can use py2app. Here’s how:
-1. **Install py2app**: Open your terminal and run:
-```python
-pip install py2app
-```
-2. Use or modify the setup.py to configure the buildings
-3. **Build the Application**: In the terminal, navigate to your project directory and run:
-```python
-python setup.py py2app
-```
-This will create a .app bundle in the dist directory. You can find the built application at: 
-```python
-/dist/VidDowloader.app
-```
-
-## Windows (Not Tested)
-To create a standalone macOS application, you can use py2app. Here’s how:
-1. **Install py2exe**: Open your terminal and run:
-```python
-pip install py2exe
-```
-2. Use or modify the setup.py to configure the buildings
-3. **Build the Application**: In the terminal, navigate to your project directory and run:
-```python
-python setup.py py2exe
-```
-This will create a .app bundle in the dist directory. You can find the built application at: 
-```python
-/dist/VidDowloader.exe
-```
 
 # Known Issues
 - Sometimes during conversions percetages reach 99% and stops althought the video is correctly converted. If this happens just close the program.
@@ -127,6 +95,3 @@ By using this software, you agree to adhere to these guidelines and accept respo
 
 
 This markdown provides a clear and organized structure for the "Contributing," "License," and "Acknowledgements" sections, making it easy for others to understand how they can contribute to the project and giving proper credit to the libraries and tools used.
-
-
-

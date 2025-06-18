@@ -10,8 +10,11 @@ RUN this command if libaries not compile and link
 python3 -m pip install --only-binary=:all: {Import name }
 '''
 from setuptools import setup
+import os
+import sys
 
-APP = ['YTDownloader.py']
+sys.setrecursionlimit(5000)
+APP = ['YTDownloaderV2.py']
 DATA_FILES = [('resources', ['resources/ffmpeg', 'resources/ffprobe'])]
 OPTIONS = {
     'iconfile':'AppIcon.icns',

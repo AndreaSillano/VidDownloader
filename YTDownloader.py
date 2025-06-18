@@ -1,806 +1,996 @@
-import customtkinter as ctk
-from tkinter import filedialog
+import flet as ft
 from pytubefix import YouTube
 import ssl
-import subprocess
 import threading
-from PIL import ImageTk, Image
 import requests
 from io import BytesIO
 import os
 import queue
-import shutil
+import subprocess
+import time
 
-
-# Global flag to indicate cancellation
-cancel_flag = threading.Event()
+from flet import Icons, Icon
+ssl._create_default_https_context = ssl._create_unverified_context
 
 FFMPEG_BIN = os.path.join(os.path.dirname(__file__), 'resources/ffmpeg')
 FFPROBE_BIN = os.path.join(os.path.dirname(__file__), 'resources/ffprobe')
 
+class VidDownloaderApp:
+    def __init__(self, page: ft.Page):
+        self.page = page
+        self.page.title = "VidDownloader"
+        self.page.window.width = 520
+        self.page.window.height = 750
+        self.page.window.resizable = False
+        self.center_window()
 
-ssl._create_default_https_context = ssl._create_unverified_context
+        self.cancel_flag = threading.Event()
+        self.download_thread = None
+        self.download_only_audio_thread = None
+        self.worker_thread = None
 
-def browse_folder():
-    folder_selected = filedialog.askdirectory()
-    if folder_selected:
-        folder_entry.delete(0, ctk.END)
-        folder_entry.insert(0, folder_selected)
-        append_to_console(f"Download folder set to {folder_selected}")
-        download_button.configure(state="normal")
-def truncate_text(text, max_length=20):
-    if len(text) > max_length:
-        return text[:max_length-3] + "..."
-    return text
+        self.setup_ui()
 
-def fetch_video_info():
-    url = url_entry.get()
-    if not url:
-        append_to_console("Error: Please enter a YouTube URL.", error=True)
-        return
+    def center_window(self):
+        self.page.window.center()
 
-    try:
-        append_to_console("Fetching video information. Please wait...")
-        yt = YouTube(url)
+    def setup_ui(self):
+        # Video/Audio selection radio buttons
+        self.video_audio_var = ft.RadioGroup(content=ft.Row([
+            ft.Radio(value="Video", label="Video with audio"),
+            ft.Radio(value="Audio", label="Audio only")
+        ]), value="Video", on_change=self.on_video_audio_change)
+        self.title = ft.Text("VidDownloader", size=30, weight='bold')
+        # URL input
+        self.link_icon = ft.Icon(Icons.LINK)
+        self.url_label = ft.Text("Youtube Url:")
+        self.url_entry = ft.TextField(label="YouTube URL", width=350, expand=True)
+        self.fetch_info_button = ft.ElevatedButton(
+            icon=Icons.REFRESH,
+            text="Fetch Info",
+            width=150,
+            height=50,
+            on_click=self.fetch_video_info
+        )
+        self.input_url = ft.Column([ft.Row([self.link_icon,self.url_label]),
+                                    ft.Row([
+                                    self.url_entry,
+                                    self.fetch_info_button
+                                    ])
+                                   ])
 
-        # Display the video thumbnail
-        img_url = yt.thumbnail_url
-        response = requests.get(img_url)
-        img_data = BytesIO(response.content)
+
+        # Info display area
+        self.thumbnail_image = ft.Image(width=160, height=90, visible=False)
+        self.video_name_label = ft.Text("N/A", weight=ft.FontWeight.W_600)
+        # Views
+        self.views_icon = Icon(Icons.REMOVE_RED_EYE_OUTLINED)
+        self.views_label = ft.Text("N/A")
+        self.views_row =ft.Row([self.views_icon,self.views_label])
+        # Duration
+        self.duration_label = ft.Text("N/A")
+        self.duration_icon = Icon(Icons.HOURGLASS_BOTTOM_ROUNDED)
+        self.duration_row = ft.Row([self.duration_icon, self.duration_label])
+        # Author
+        self.author_icon = Icon(Icons.PERSON)
+        self.author_label = ft.Text("N/A")
+        self.author_row = ft.Row([self.author_icon, self.author_label])
+        #Date
+        self.pub_date_label = ft.Text("N/A")
+        self.pub_date_label_icon = Icon(Icons.CALENDAR_MONTH_OUTLINED)
+        self.calendar_row = ft.Row([self.pub_date_label_icon,self.pub_date_label])
+        self.infos = ft.Row([self.thumbnail_image,ft.Column([
+                    self.video_name_label,
+                    ft.Column([
+                        ft.Row([ self.author_row,
+                    self.views_row],alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                    ft.Row([
+                    self.duration_row,
+                    self.calendar_row],alignment=ft.MainAxisAlignment.SPACE_BETWEEN)])
+                ])],alignment=ft.MainAxisAlignment.CENTER,visible=False)
+        self.fetch_loading = ft.Row([ft.Column([ft.ProgressRing(width=32, height=32, stroke_width = 5), ft.Text("Fetching Info")],horizontal_alignment=ft.CrossAxisAlignment.CENTER)],alignment=ft.MainAxisAlignment.CENTER, visible=True)
+        self.info_column =ft.Container(ft.Column(
+            [
+                self.fetch_loading,
+                self.infos
+
+            ],
+       alignment=ft.MainAxisAlignment.CENTER ), bgcolor=ft.Colors.GREY_200, expand=True, height=150, border_radius=10,  visible=False)
+
+        # Resolution dropdown
+        # Audio checkbox
+        self.resolution_icons = Icon(Icons.LOCAL_MOVIES_OUTLINED)
+        self.audio_icon = Icon(Icons.MUSIC_NOTE_ROUNDED)
+        self.add_audio_checkbox = ft.Checkbox(
+        label="with Audio",
+        value=True,
+        disabled=False,
+        on_change=self.on_audio_checkbox_change
+        )
+        self.with_audio = ft.Row([self.audio_icon, self.add_audio_checkbox])
+
+
+        self.resolution_label = ft.Text("Resolution")
+        self.resultion_top = ft.Row([self.resolution_icons, self.resolution_label])
+        self.resolution_dropdown = ft.Dropdown(
+            options=[ft.dropdown.Option("Select a resolution")],
+            disabled=True,
+            on_change=self.on_resolution_selected,
+            expand=True,
+            width=510
+        )
+
+
+        self.resultion = ft.Column([
+            self.resultion_top,
+            self.resolution_dropdown,
+            self.with_audio
+        ])
+
+
+        # Folder selection
+        self.folder_icon =Icon(Icons.FOLDER_OPEN_ROUNDED)
+        self.folder_label = ft.Text("Download Folder")
+        self.folder_title = ft.Row([self.folder_icon,self.folder_label])
+        self.folder_entry = ft.TextField(width=350, expand=True, disabled=True)
+        self.folder_button = ft.ElevatedButton(
+            text="Browse",
+            on_click=self.browse_folder,
+            disabled=True,
+            width=150,
+            height=50,
+        )
+        self.folder_row = ft.Column([self.folder_title,ft.Row([self.folder_entry, self.folder_button])])
+
+        # Download button
+        self.pb_headline = ft.Text("Downloading...", size=10, visible=False)
+        self.pb= ft.ProgressBar(width=400, height=30, border_radius=10, value=0, visible=False)
+        self.download_button = ft.ElevatedButton(
+            text="Download",
+            on_click=self.toggle_download,
+            height=50,
+            disabled=True,
+            expand=True
+        )
+        self.download_pb = ft.Row([self.pb, self.download_button],alignment=ft.MainAxisAlignment.CENTER, expand=True)
+        self.last_row = ft.Column([self.pb_headline, self.download_pb], alignment=ft.MainAxisAlignment.CENTER, expand=True)
+        self.download_row =  ft.Container(self.last_row, margin=ft.margin.only(top=10, bottom=30), visible=False)
+
+        # Console area
+        self.console_text = ft.Column(
+            [ft.Text("Console", weight=ft.FontWeight.BOLD)],
+            scroll=ft.ScrollMode.ALWAYS,
+            height=150,
+            width=510,
+            expand=True
+        )
+        self.badge_text = ft.Text("Error")
+        self.dlg = ft.SnackBar(self.badge_text, bgcolor=ft.Colors.GREEN_300)
+
+
+        # Layout
+        self.page.add(
+            ft.Column([
+                ft.Row([ self.title ], alignment=ft.MainAxisAlignment.CENTER),
+                self.video_audio_var,
+                self.input_url,
+                self.info_column,
+                self.resultion,
+                self.folder_row,
+                self.last_row,
+                ft.Container(
+                    content=self.console_text,
+                    border=ft.border.all(1, ft.colors.GREY_400),
+                    padding=5,
+                    border_radius=5,
+                    visible=False
+                )
+            ], expand=True, scroll=ft.ScrollMode.HIDDEN,)
+        )
+
+    def truncate_text(self, text, max_length=37):
+        if len(text) > max_length:
+            return text[:max_length-3] + "..."
+        return text
+
+    def browse_folder(self, e):
+        def get_directory_result(result: ft.FilePickerResultEvent):
+            if result.path:
+                self.folder_entry.value = result.path
+                self.append_to_console(f"Download folder set to {result.path}")
+                self.download_button.disabled = False
+                self.page.update()
+
+        file_picker = ft.FilePicker(on_result=get_directory_result)
+        self.page.overlay.append(file_picker)
+        self.page.update()
+        file_picker.get_directory_path()
+    def toogle_badge(self,msg, error=False):
+        if not error:
+            self.dlg.bgcolor = ft.Colors.GREEN_300
+        else:
+            self.dlg.bgcolor = ft.Colors.RED_300
+        self.badge_text.value = msg
+        self.page.open(self.dlg)
+        #self.page.update()
+    def fetch_video_info(self, e):
+        url = self.url_entry.value
+
+        if not url:
+            self.toogle_badge("Please enter a YouTube URL.", True)
+            self.append_to_console("Error: Please enter a YouTube URL.", error=True)
+            return
+
+        try:
+            self.append_to_console("Fetching video information. Please wait...")
+
+            yt = YouTube(url)
+            self.info_column.visible = True
+            self.infos.visible = False
+            self.fetch_loading.visible = True
+            self.page.update()
+            #print(yt.author, yt.views, yt.publish_date)
+            # Display the video thumbnail
+            self.pub_date_label.value = yt.publish_date.date()
+            self.views_label.value = yt.views
+            self.author_label.value = yt.author
+            img_url = yt.thumbnail_url
+            response = requests.get(img_url)
+            img_data = BytesIO(response.content)
+
+            self.thumbnail_image.src_base64 = self.image_to_base64(img_data)
+            self.thumbnail_image.visible = True
+
+            # Display video info
+            video_name = self.truncate_text(yt.title)
+            self.video_name_label.value = f"{video_name}"
+
+            video_duration = yt.length
+            minutes, seconds = divmod(video_duration, 60)
+            self.duration_label.value = f"{minutes:02}:{seconds:02}"
+
+            # Fetch streams based on video/audio selection
+            if self.video_audio_var.value == "Video":
+                streams = yt.streams.order_by('resolution').filter(only_video=True)
+                stream_size = streams[0].filesize
+                #size_text = f"{stream_size // (1024 * 1024)} MB" if stream_size >= 1024 * 1024 else f"{stream_size // 1024} KB"
+                #self.views_label.value = f"{yt.views}"
+
+                resolutions = []
+                for stream in streams:
+                    if stream.resolution:
+                        if stream.mime_type == "video/webm":
+                            res = f"{stream.resolution} (WebM - Conversion Needed)"
+                            if res not in resolutions:
+                                resolutions.append(f"{stream.resolution} (WebM - Conversion Needed)")
+                        else:
+                            if stream.resolution not in resolutions:
+                                resolutions.append(stream.resolution)
+
+                if resolutions:
+                    self.resolution_dropdown.options = [ft.dropdown.Option(res) for res in resolutions]
+                    self.resolution_dropdown.value = resolutions[-1]
+                    self.resolution_dropdown.disabled = False
+                    self.append_to_console("Resolutions fetched! Select one to proceed.")
+                else:
+                    self.toogle_badge("No streams found for this URL.", True)
+                    self.append_to_console("Error: No streams found for this URL.", error=True)
+            else:
+                streams = yt.streams.filter(only_audio=True).order_by('abr')
+                stream_size = streams[0].filesize
+                #size_text = f"{stream_size // (1024 * 1024)} MB" if stream_size >= 1024 * 1024 else f"{stream_size // 1024} KB"
+                #self.size_label.value = f"{size_text}"
+
+                audio_bitrates = []
+                for stream in streams:
+                    if stream.abr:
+                        if stream.mime_type == "audio/webm":
+                            audio_bitrates.append(f"{stream.abr} (WebM - Conversion Needed)")
+                        else:
+                            audio_bitrates.append(stream.abr)
+
+                if audio_bitrates:
+                    self.resolution_dropdown.options = [ft.dropdown.Option(bitrate) for bitrate in audio_bitrates]
+                    self.resolution_dropdown.value = audio_bitrates[-1]
+                    self.resolution_dropdown.disabled = False
+                    self.append_to_console("Audio bitrates fetched! Select one to proceed.")
+                else:
+                    self.toogle_badge("No audio streams found for this URL.", True)
+                    self.append_to_console("Error: No audio streams found for this URL.", error=True)
+
+            self.fetch_loading.visible = False
+            self.infos.visible = True
+            self.page.update()
+
+        except Exception as e:
+            self.toogle_badge(f"Error: {str(e)}", True)
+            self.append_to_console(f"Error: {str(e)}", error=True)
+
+    def image_to_base64(self, img_data):
+        from PIL import Image
+        import base64
+        from io import BytesIO
+
         img = Image.open(img_data)
         img = img.resize((160, 90), Image.LANCZOS)
-        thumbnail_image = ImageTk.PhotoImage(img)
-        tk_img = ctk.CTkImage(img, size=(160,90))
-        thumbnail_label.configure(image=tk_img)
-        thumbnail_label.image = thumbnail_image
-        thumbnail_label.configure(text="")
 
-        # Display video name, duration and size
-        video_name = truncate_text(yt.title)
-        video_name_label.configure(text=f"Video Name: {video_name}")
-        video_duration = yt.length
-        minutes, seconds = divmod(video_duration, 60)
-        duration_label.configure(text=f"Duration: {minutes:02}:{seconds:02}")
+        buffered = BytesIO()
+        img.save(buffered, format="PNG")
+        return base64.b64encode(buffered.getvalue()).decode("utf-8")
 
-        # Fetch and display resolutions
-        if video_audio_var.get() == "Video":
-            streams = yt.streams.order_by('resolution').filter(only_video=True)
-            stream_size = streams[0].filesize
-            if stream_size < 1024 * 1024:
-                size_label.configure(text=f"Download size: {stream_size // 1024} KB")
-            else:
-                size_label.configure(text=f"Download size: {stream_size // (1024 * 1024)} MB")
+    def on_resolution_selected(self, e):
+        self.folder_button.disabled = False
+        self.append_to_console(f"Resolution set to {self.resolution_dropdown.value}")
 
-            #resolutions = [stream.resolution for stream in streams if stream.resolution]
-            #resolutions = list(dict.fromkeys(resolutions))  # Remove duplicates while preserving order
-            resolutions = []
-            for stream in streams:
-                if stream.resolution:
-                    if stream.mime_type == "video/webm":
-                        resolutions.append(f"{stream.resolution} (WebM - Conversion Needed)")
-                    else:
-                        resolutions.append(stream.resolution)
-            if resolutions:
-                resolution_combobox.configure(values=resolutions)
-                resolution_combobox.set(resolutions[-1])  # Default to highest resolution
-                resolution_combobox.configure(state="normal")
-                append_to_console("Resolutions fetched! Select one to proceed.")
-            else:
-                append_to_console("Error: No streams found for this URL.", error=True)
+    def on_video_audio_change(self, e):
+        self.reset_ui()
 
+        if self.video_audio_var.value == 'Audio':
+            self.add_audio_checkbox.disabled = True
+            self.add_audio_checkbox.value = True
         else:
-            # Disable the resolution combobox for audio-only
-            # Fetch audio-only streams
-            streams = yt.streams.filter(only_audio=True).order_by('abr')
-            stream_size = streams[0].filesize
-            if stream_size < 1024 * 1024:
-                size_label.configure(text=f"Download size: {stream_size // 1024} KB")
-            else:
-                size_label.configure(text=f"Download size: {stream_size // (1024 * 1024)} MB")
+            self.add_audio_checkbox.disabled = False
+            self.add_audio_checkbox.value = False
+        self.page.update()
 
-            # Fetch available audio bitrates
-            audio_bitrates = []
-            for stream in streams:
-                if stream.abr:
-                    if stream.mime_type == "audio/webm":
-                        audio_bitrates.append(f"{stream.abr} (WebM - Conversion Needed)")
-                    else:
-                        audio_bitrates.append(stream.abr)
+    def on_audio_checkbox_change(self, e):
+        pass  # No special handling needed for checkbox change
 
-            # Update the combobox and notify the user
-            if audio_bitrates:
-                resolution_combobox.configure(values=audio_bitrates)
-                resolution_combobox.set(audio_bitrates[-1])  # Default to highest bitrate
-                resolution_combobox.configure(state="normal")
-                append_to_console("Audio bitrates fetched! Select one to proceed.")
-            else:
-                append_to_console("Error: No audio streams found for this URL.", error=True)
+    def reset_ui(self):
+        self.url_entry.value = ""
+        self.folder_entry.value = ""
+        self.author_label.value = "N/A"
+        self.download_button.text = "Download"
+        self.thumbnail_image.visible = False
+        self.pb.visible = False
+        self.pb_headline.visible = False
+        self.views_label.value = "N/A"
+        self.pub_date_label.value = "N/A"
+        self.duration_label.value = "N/A"
+        self.resolution_dropdown.value = None
+        self.resolution_dropdown.options = []
+        self.resolution_dropdown.disabled = True
+        self.pb.value = 0
+        self.pb_headline.value = "Downloading..."
 
-        # Show the info_frame
-        info_frame.grid(row=4, column=0, columnspan=3, padx=10, pady=10, sticky="nsew")
+        if self.video_audio_var.value != "Video":
+            self.folder_button.disabled = False
+            self.add_audio_checkbox.disabled = True
+        else:
+            self.folder_button.disabled = True
+            self.add_audio_checkbox.disabled = False
 
-    except Exception as e:
-        append_to_console(f"Error: {str(e)}", error=True)
+        self.download_button.disabled = True
+        self.info_column.visible = False
+        self.page.update()
 
-def on_resolution_selected(value):
-    folder_button.configure(state="normal")
-    append_to_console(f"Resolution set to {value}")
+    def get_unique_filename(self, filepath):
+        if not os.path.exists(filepath):
+            return filepath
 
-def reset_ui():
-    url_entry.delete(0, ctk.END)
-    folder_entry.delete(0, ctk.END)
-    download_button.configure(text="Download")
-    thumbnail_label.configure(image="", text="")  # Clear thumbnail
-    size_label.configure(text="Download size: N/A")
-    duration_label.configure(text="Duration: N/A")
-    resolution_combobox.set([])
-    resolution_combobox.configure(values=[], state="disabled")
-    #cancel_flag.clear()
-    if video_audio_var.get() != "Video":
-        folder_button.configure(state="normal")
-        add_audio_checkbox.configure(state="normal")
-        #append_to_console("Audio only selected!")
-    else:
-        #append_to_console("Video with audio selected!")
-        folder_button.configure(state="disabled")
-        add_audio_checkbox.configure(state="disabled")
-
-    download_button.configure(state="disabled")
-    info_frame.grid_forget()  # Hide info_frame
-
-def on_video_audio_change(value):
-    reset_ui()
-    if value == 'Audio':
-        add_audio_checkbox.configure(state = "disabled")
-        add_audio_var.set('on')
-    else:
-        add_audio_checkbox.configure(state = "normal")
-        add_audio_var.set('off')
-
-
-def get_unique_filename(filepath):
-    """
-    Generate a unique filename by appending a number if the file already exists.
-    """
-    if not os.path.exists(filepath):
-        return filepath
-
-    base, ext = os.path.splitext(filepath)
-    counter = 1
-    new_filepath = f"{base}_{counter}{ext}"
-
-    while os.path.exists(new_filepath):
-        counter += 1
+        base, ext = os.path.splitext(filepath)
+        counter = 1
         new_filepath = f"{base}_{counter}{ext}"
 
-    return new_filepath
+        while os.path.exists(new_filepath):
+            counter += 1
+            new_filepath = f"{base}_{counter}{ext}"
 
-def delete_files_in_folder(folder_path):
-    if os.path.exists(folder_path):
-        for filename in os.listdir(folder_path):
-            file_path = os.path.join(folder_path, filename)
-            if os.path.isfile(file_path):
-                os.remove(file_path)  # Delete the file
-    else:
-        print(f"The folder '{folder_path}' does not exist.")
+        return new_filepath
 
-def toggle_download():
-    global download_thread
-    global download_only_audio_thread
-    global worker_thread
+    def delete_files_in_folder(self):
+        current_folder = os.getcwd()
+        folder_path = os.path.join(current_folder, "tmp")
+        if os.path.exists(folder_path):
+            for filename in os.listdir(folder_path):
+                file_path = os.path.join(folder_path, filename)
+                if os.path.isfile(file_path):
+                    os.remove(file_path)
+    def disable_ui(self):
+        self.download_button.text = "Cancel"
+        self.video_audio_var.disabled = True
+        self.folder_button.disabled = True
+        self.fetch_info_button.disabled = True
+        self.resolution_dropdown.disabled = True
+        self.url_entry.disabled = True
+        self.folder_entry.disabled = True
+        self.add_audio_checkbox.disabled = True
+        self.page.update()
+    def toggle_download(self, e):
+        if self.download_button.text == "Download":
+            current_folder = os.getcwd()
+            self.pb.visible = True
+            self.pb_headline.visible = True
+            self.page.update()
+            tmp_folder = os.path.join(current_folder, "tmp")
+            if not os.path.exists(tmp_folder):
+                os.makedirs(tmp_folder)
+            else:
+                self.delete_files_in_folder()
 
-    if download_button.cget("text") == "Download":
-        current_folder = os.getcwd()  # Get the current working directory
-        tmp_folder = os.path.join(current_folder, "tmp")
-        if not os.path.exists(tmp_folder):
-            os.makedirs(tmp_folder)
+
+            self.cancel_flag.clear()
+
+            if self.video_audio_var.value == "Video":
+                self.disable_ui()
+
+                self.download_thread = threading.Thread(target=self.download_video)
+                self.download_thread.start()
+
+                if self.add_audio_checkbox.value:
+                    if os.path.exists(FFMPEG_BIN) and os.path.exists(FFPROBE_BIN):
+                        self.download_only_audio_thread = threading.Thread(target=self.download_audio)
+                        self.download_only_audio_thread.start()
+                        self.worker_thread = threading.Thread(target=self.wait_for_download_completion)
+                        self.worker_thread.start()
+                    else:
+                        self.append_to_console("Missing FFMPEG-FFPROBE. Cannot merge audio - Downloading Video", error=True)
+                        self.toogle_badge("Missing FFMPEG-FFPROBE. Cannot merge audio", True)
+                        self.add_audio_checkbox.value = False
+            else:
+                self.download_thread = threading.Thread(target=self.download_audio)
+                self.download_thread.start()
+
         else:
-            delete_files_in_folder(tmp_folder)
-        cancel_flag.clear()
-        if video_audio_var.get() == "Video":
-            download_thread = threading.Thread(target=download_video)
-            download_thread.start()
-            if add_audio_var.get() == 'on':
+            self.cancel_flag.set()
+            self.pb.visible = False
+            self.pb_headline.visible = False
+            self.toogle_badge("Process stopped!", error=True)
+            self.page.update()
+
+            if self.download_thread and self.download_thread.is_alive():
+                self.download_thread.join(timeout=5)
+            if self.download_only_audio_thread and self.download_only_audio_thread.is_alive():
+                self.download_only_audio_thread.join(timeout=5)
+            if self.worker_thread and self.worker_thread.is_alive():
+                self.worker_thread.join(timeout=5)
+
+            self.download_button.disabled = False
+            self.folder_button.disabled = False
+            self.fetch_info_button.disabled = False
+            self.resolution_dropdown.disabled = False
+            self.url_entry.disabled = False
+            self.folder_entry.disabled = False
+            self.add_audio_checkbox.disabled = False
+            self.pb.visible = False
+            self.pb_headline.visible = False
+
+            self.page.update()
+
+        self.page.update()
+    def wait_for_download_completion(self):
+        if self.download_thread:
+            self.download_thread.join()
+
+        if self.download_only_audio_thread:
+            self.download_only_audio_thread.join()
+
+        if self.add_audio_checkbox.value:
+            try:
+                self.merge_video_audio(folder_path=self.folder_entry.value)
+                self.append_to_console("Download complete!")
+                self.toogle_badge("Download Completed!")
+
+                self.pb.visible = False
+                self.pb_headline.visible = False
+                self.download_button.disabled = False
+                self.download_button.text = "Download"
+                self.video_audio_var.disabled = False
+                self.folder_button.disabled = False
+                self.fetch_info_button.disabled = False
+                self.resolution_dropdown.disabled = False
+                self.url_entry.disabled = False
+                self.folder_entry.disabled = False
+                self.add_audio_checkbox.disabled = False
+                self.pb.visible = False
+                self.pb_headline.visible = False
+                self.page.update()
+            except Exception as e:
+                self.reset_ui()
+                self.download_button.disabled = False
+                self.toogle_badge(f"Error: {str(e)}", True)
+                self.append_to_console(f"Error: {str(e)}", error=True)
+
+    def download_audio(self):
+        url = self.url_entry.value
+        abr = self.resolution_dropdown.value.split()[0] if self.video_audio_var.value != "Video" else None
+        folder_path = self.folder_entry.value
+        if self.add_audio_checkbox.value:
+            current_folder = os.getcwd()
+            tmp_folder = os.path.join(current_folder, "tmp")
+            if not os.path.exists(tmp_folder):
+                os.makedirs(tmp_folder)
+            folder_path = tmp_folder
+
+        if not url:
+            self.append_to_console("Error: Please enter a YouTube URL.", error=True)
+            self.toogle_badge("Please enter a YouTube URL.", True)
+            return
+
+        if not folder_path:
+            self.toogle_badge("Please select a download folder.", True)
+            self.append_to_console("Error: Please select a download folder.", error=True)
+            return
+
+        try:
+            yt = YouTube(url, on_progress_callback=self.on_progress_callback if not self.add_audio_checkbox.value else None)
+
+            stream = yt.streams.filter(only_audio=True, abr=abr).order_by('abr').first()
+            if abr is not None:
+                quality = abr
+            else:
+                quality = 'tmp'
+
+            if stream:
+                self.append_to_console("Downloading audio...")
+
+                file_extension = stream.default_filename.split('.')[-1]
+                base_filename = stream.default_filename.replace(f".{file_extension}", "")
+                custom_filename = f"{base_filename}_{quality}.{file_extension}"
+                if self.video_audio_var.value == 'Video':
+                    custom_filename = f"audio_{custom_filename}"
+                unique_filename = self.get_unique_filename(custom_filename)
+                output_file = stream.download(output_path=folder_path, filename=unique_filename)
+                if self.cancel_flag.is_set():
+                    self.append_to_console("Download audio stopped.")
+                    self.download_button.text = "Download"
+                    self.delete_files_in_folder()
+                    return
+
+                self.append_to_console("Download audio complete!")
+
+                #self.toogle_badge("Download audio complete!")
+
                 if os.path.exists(FFMPEG_BIN) and os.path.exists(FFPROBE_BIN):
-                    download_only_audio_thread = threading.Thread(target=download_audio)
-                    download_only_audio_thread.start()
-                    worker_thread = threading.Thread(target=wait_for_download_completion)
-                    worker_thread.start()
+                    if output_file.endswith('.webm') and self.video_audio_var.value != "Video":
+                        self.convert_to_mp3_from_webm(output_file, folder_path)
+                    elif output_file.endswith('.mp4') and self.video_audio_var.value != "Video":
+                        self.convert_to_mp3_from_mp4(output_file, folder_path)
+                    elif output_file.endswith('.m4a') and self.video_audio_var.value != "Video":
+                        self.convert_to_mp3_from_m4a(output_file, self.folder_entry.value)
                 else:
-                    append_to_console("Missing FFMPEG-FFPROBE. Cannot merge audio - Downloading Video", error=True)
-                    add_audio_var.set('off')
+                    self.append_to_console("Missing FFMPEG-FFPROBE. Skipping Conversion", error=True)
+                    self.toogle_badge("Missing FFMPEG-FFPROBE. Skipping Conversion", True)
+                if self.video_audio_var.value !='Video':
+                    self.download_button.text = "Download"
+                    self.video_audio_var.disabled = False
+                    self.folder_button.disabled = False
+                    self.fetch_info_button.disabled = False
+                    self.resolution_dropdown.disabled = False
+                    self.url_entry.disabled = False
+                    self.folder_entry.disabled = False
+                    self.pb.visible = False
+                    self.pb_headline.visible = False
+                    self.toogle_badge("Download Completed!")
+            else:
+                self.reset_ui()
+                self.download_button.disabled = False
 
-        else:
-            download_thread = threading.Thread(target=download_audio)
-            download_thread.start()
-
-    else:
-        cancel_flag.set()  # Signal cancellation
-        if download_thread and download_thread.is_alive():
-            download_thread.join(timeout=5)
-        if download_only_audio_thread and download_only_audio_thread.is_alive():
-            download_only_audio_thread.join(timeout=5)
-        if worker_thread and worker_thread.is_alive():
-            worker_thread.join(timeout = 5)
-
-        #reset_ui()
-        download_button.configure(state="normal")
-        folder_button.configure(state="normal")
-        fetch_info_button.configure(state="normal")
-        resolution_combobox.configure(state="normal")
-        url_entry.configure(state="normal")
-        folder_entry.configure(state="normal")
-        add_audio_checkbox.configure(state="normal")
-
-def wait_for_download_completion():
-    if download_thread:
-        download_thread.join()
-
-    if download_only_audio_thread:
-        download_only_audio_thread.join()
-
-    # After both threads finish, merge if needed
-    if add_audio_checkbox.get() == "on":
-        try:
-            merge_video_audio(folder_path=folder_entry.get())
-            append_to_console("Download complete!")
-
-            #download_button.configure(text="Download")
         except Exception as e:
-            reset_ui()
-            download_button.configure(state="normal")
-            append_to_console(f"Error: {str(e)}", error=True)
+            self.reset_ui()
+            self.download_button.disabled = False
+            self.append_to_console(f"Error: {str(e)}", error=True)
+            self.toogle_badge(f"Error: {str(e)}", True)
+        self.page.update()
 
-def download_audio():
-    url = url_entry.get()
-    abr = resolution_combobox.get().split()[0] if video_audio_var.get() != "Video" else None
-    folder_path = folder_entry.get()
+    def download_video(self):
+        url = self.url_entry.value
+        res = self.resolution_dropdown.value.split()[0] if self.video_audio_var.value == "Video" else None
+        folder_path = self.folder_entry.value
 
-    if add_audio_var.get() == 'on':
-        current_folder = os.getcwd()  # Get the current working directory
-        tmp_folder = os.path.join(current_folder, "tmp")
-        if not os.path.exists(tmp_folder):
-            os.makedirs(tmp_folder)
-        folder_path = tmp_folder
+        if self.add_audio_checkbox.value:
+            current_folder = os.getcwd()
+            tmp_folder = os.path.join(current_folder, "tmp")
+            if not os.path.exists(tmp_folder):
+                os.makedirs(tmp_folder)
+            folder_path = tmp_folder
 
+        if not url:
+            self.append_to_console("Error: Please enter a YouTube URL.", error=True)
+            self.toogle_badge("Please enter a YouTube URL.", True)
 
-    if not url:
-        append_to_console("Error: Please enter a YouTube URL.", error=True)
-        return
+            return
 
-    if not folder_path:
-        append_to_console("Error: Please select a download folder.", error=True)
-        return
+        if not folder_path:
+            self.append_to_console("Error: Please select a download folder.", error=True)
+            self.toogle_badge("Please select a download folder.", True)
+            return
 
-    try:
-        download_button.configure(text="Cancel")
-        folder_button.configure(state="disabled")
-        fetch_info_button.configure(state="disabled")
-        resolution_combobox.configure(state="disabled")
-        url_entry.configure(state="disabled")
-        folder_entry.configure(state="disabled")
-        add_audio_checkbox.configure(state="disabled")
+        try:
+            yt = YouTube(url, on_progress_callback=self.on_progress_callback)
+            stream = yt.streams.filter(res=res, adaptive=True, only_video=True).first()
+            quality = res
 
+            if stream:
+                self.append_to_console("Downloading video ...")
 
-        yt = YouTube(url, on_progress_callback=on_progress_callback if add_audio_var.get() == "off" else None)
+                file_extension = stream.default_filename.split('.')[-1]
+                base_filename = stream.default_filename.replace(f".{file_extension}", "")
+                custom_filename = f"{base_filename}_{quality}.{file_extension}"
+                unique_filename = self.get_unique_filename(custom_filename)
+                #print(unique_filename)
+                output_file = stream.download(output_path=folder_path, filename=unique_filename)
 
-        stream = yt.streams.filter(only_audio=True, abr=abr).order_by('abr').first()
-        if abr != None:
-            quality = abr
+                if self.cancel_flag.is_set():
+                    self.append_to_console("Download video stopped.")
+                    self.download_button.text = "Download"
+                    self.delete_files_in_folder()
+                    return
+
+                self.append_to_console("Download video complete!")
+                #self.toogle_badge("Download video complete!")
+
+                if os.path.exists(FFMPEG_BIN) and os.path.exists(FFPROBE_BIN):
+                    if output_file.endswith('.webm') and self.video_audio_var.value == "Video":
+                        self.convert_to_mp4_from_webm(output_file, folder_path)
+
+                else:
+                    self.append_to_console("Missing FFMPEG-FFPROBE. Skipping Conversion", error=True)
+                    self.toogle_badge("Missing FFMPEG-FFPROBE. Skipping Conversion",True)
+                self.download_button.text = "Download"
+                self.video_audio_var.disabled = False
+                self.folder_button.disabled = False
+                self.fetch_info_button.disabled = False
+                self.resolution_dropdown.disabled = False
+                self.url_entry.disabled = False
+                self.folder_entry.disabled = False
+                self.add_audio_checkbox.disabled = False
+                self.pb_headline.visible= False
+                self.pb.visible = False
+                if not self.add_audio_checkbox.value:
+                    self.toogle_badge("Download Completed!")
+            else:
+                self.append_to_console(f"Error: Resolution {res} not available for this video.", error=True)
+                self.toogle_badge(f"Error: Resolution {res} not available for this video.", True)
+                self.reset_ui()
+                self.download_button.disabled = False
+
+        except Exception as e:
+            self.reset_ui()
+            self.download_button.disabled = False
+            self.append_to_console(f"Error: {str(e)}", error=True)
+            self.toogle_badge(f"Error: {str(e)}", True)
+
+        self.page.update()
+
+    def merge_video_audio(self, folder_path):
+        self.append_to_console("Merging audio and video...")
+        self.append_to_console("It may take a while...")
+        self.disable_ui()
+        video_file = None
+        audio_file = None
+        for file in os.listdir("./tmp"):
+            if file.endswith(('.webm', '.mp4')):
+                video_file = os.path.join("./tmp", file)
+            if file.startswith("audio"):
+                audio_file = os.path.join("./tmp", file)
+
+        if not video_file or not audio_file:
+            self.append_to_console("Error: Video or audio file is missing.", error=True)
+            return
+
+        base_filename = os.path.basename(video_file).replace('.webm', '').replace('.mp4', '')
+        final_output = self.get_unique_filename(os.path.join(folder_path, f"{base_filename}.mp4"))
+
+        total_duration = self.get_total_duration(video_file)
+
+        command = [
+            FFMPEG_BIN, '-fflags', '+genpts', '-i', video_file, '-i', audio_file,
+            '-c:v', 'copy', '-c:a', 'aac', '-strict', 'experimental', final_output
+        ]
+        self.process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+        q = queue.Queue()
+        self.enqueue = threading.Thread(target=self.enqueue_output, args=(self.process.stderr, self.process.stdout, q))
+        self.enqueue.start()
+
+        old_percentage = -1
+        while True:
+            try:
+                line = q.get_nowait()
+                print(line)
+            except queue.Empty:
+                if self.process.poll() is not None:
+                    break
+                if self.cancel_flag.is_set():
+                    self.process.terminate()
+                    self.append_to_console("Merging stopped.")
+                    self.download_button.text = "Download"
+                    self.delete_files_in_folder()
+                    return
+                else:
+                    time.sleep(0.1)
+                    continue
+
+            if "time=" in line:
+                time_str = line.split("time=")[1].split(" ")[0]
+                if time_str != 'N/A':
+                    hours, minutes, seconds = map(float, time_str.split(":"))
+                    current_seconds = hours * 3600 + minutes * 60 + seconds
+                    percentage = int((current_seconds / total_duration) * 100)
+                    if percentage != old_percentage:
+                        self.pb.value = percentage/100
+                        self.pb_headline.value = f"Merging {int(percentage)}%"
+                        self.append_to_console(f"Merging Progress: {percentage}%")
+                        self.page.update()
+                    old_percentage = percentage
+
+        self.process.wait()
+        self.process.terminate()
+
+        if os.path.exists(final_output):
+            self.append_to_console(f"Merging complete!")
         else:
-            quality = 'tmp'
+            self.append_to_console("Error: Merging failed.", error=True)
 
-        if stream:
-            append_to_console("Downloading audio...")
-            root.update_idletasks()
+        if os.path.exists(video_file):
+            os.remove(video_file)
+        if os.path.exists(audio_file):
+            os.remove(audio_file)
 
-            file_extension = stream.default_filename.split('.')[-1]
-            base_filename = stream.default_filename.replace(f".{file_extension}", "")
-            custom_filename = f"{base_filename}_{quality}.{file_extension}"
-            if add_audio_var.get() == 'on':
-                custom_filename = f"audio_{custom_filename}"
-            unique_filename = get_unique_filename(os.path.join(folder_path, custom_filename))
-            # Perform the download with the new filename
-            output_file = stream.download(output_path=folder_path, filename=unique_filename)
-            if cancel_flag.is_set():  # Check if cancellation was requested
-                append_to_console("Download audio stopped.")
-                download_button.configure(text="Download")
-                if os.path.exists(output_file):
-                    os.remove(output_file)
-                return
-
-            append_to_console("Download audio complete!")
-
-            if os.path.exists(FFMPEG_BIN) and os.path.exists(FFPROBE_BIN):
-                if output_file.endswith('.webm') and video_audio_var.get() != "Video":
-                    convert_to_mp3_from_webm(output_file, folder_path)
-
-                elif output_file.endswith('.mp4') and video_audio_var.get() != "Video":
-                    convert_to_mp3_from_mp4(output_file, folder_path)
-            else:
-                append_to_console("Missing FFMPEG-FFPROBE. Skipping Conversion", error=True)
-
-            download_button.configure(state="normal")
-            download_button.configure(text = "Download")
-            folder_button.configure(state="normal")
-            fetch_info_button.configure(state="normal")
-            resolution_combobox.configure(state="normal")
-            url_entry.configure(state="normal")
-            folder_entry.configure(state="normal")
-
-        else:
-            reset_ui()
-            download_button.configure(state="normal")
-    except Exception as e:
-        reset_ui()
-        download_button.configure(state="normal")
-
-        append_to_console(f"Error: {str(e)}", error=True)
-
-def download_video():
-    url = url_entry.get()
-    res = resolution_combobox.get().split()[0] if video_audio_var.get() == "Video" else None
-    folder_path = folder_entry.get()
-    if add_audio_var.get() == 'on':
-        current_folder = os.getcwd()  # Get the current working directory
-        tmp_folder = os.path.join(current_folder, "tmp")
-        if not os.path.exists(tmp_folder):
-            os.makedirs(tmp_folder)
-        folder_path = tmp_folder
-
-    if not url:
-        append_to_console("Error: Please enter a YouTube URL.", error=True)
-        return
-
-    if not folder_path:
-        append_to_console("Error: Please select a download folder.", error=True)
-        return
-
-    try:
-        download_button.configure(text="Cancel")
-        folder_button.configure(state="disabled")
-        fetch_info_button.configure(state="disabled")
-        resolution_combobox.configure(state="disabled")
-        url_entry.configure(state="disabled")
-        folder_entry.configure(state="disabled")
-        add_audio_checkbox.configure(state="disabled")
-
-        yt = YouTube(url, on_progress_callback=on_progress_callback)
-        stream = yt.streams.filter(res=res, adaptive=True, only_video=True).first()
-        quality = res
-
-        if stream:
-            append_to_console("Downloading video ...")
-            root.update_idletasks()
-
-            file_extension = stream.default_filename.split('.')[-1]
-            base_filename = stream.default_filename.replace(f".{file_extension}", "")
-            custom_filename = f"{base_filename}_{quality}.{file_extension}"
-            unique_filename = get_unique_filename(os.path.join(folder_path, custom_filename))
-            # Perform the download with the new filename
-            output_file = stream.download(output_path=folder_path, filename=unique_filename)
-            if cancel_flag.is_set():  # Check if cancellation was requested
-                append_to_console("Download video stopped.")
-                download_button.configure(text="Download")
-                if os.path.exists(output_file):
-                    os.remove(output_file)
-                #reset_ui()
-                return
-
-            append_to_console("Download video complete!")
-
-            if os.path.exists(FFMPEG_BIN) and os.path.exists(FFPROBE_BIN):
-                if output_file.endswith('.webm') and video_audio_var.get() == "Video":
-                    convert_to_mp4_from_webm(output_file, folder_path)
-            else:
-                append_to_console("Missing FFMPEG-FFPROBE. Skipping Conversion", error=True)
-
-            download_button.configure(state="normal")
-            download_button.configure(text = "Download")
-            folder_button.configure(state="normal")
-            fetch_info_button.configure(state="normal")
-            resolution_combobox.configure(state="normal")
-            url_entry.configure(state="normal")
-            folder_entry.configure(state="normal")
-            add_audio_checkbox.configure(state="normal")
-
-        else:
-            append_to_console(f"Error: Resolution {res} not available for this video.", error=True)
-            reset_ui()
-            download_button.configure(state="normal")
-    except Exception as e:
-        reset_ui()
-        download_button.configure(state="normal")
-
-        append_to_console(f"Error: {str(e)}", error=True)
-
-def merge_video_audio(folder_path):
-    append_to_console("Merging audio and video...")
-    append_to_console("It may take a while...")
-    root.update_idletasks()
-    old_percetage = -1
-
-    video_file = None
-    audio_file = None
-    for file in os.listdir("./tmp"):
-        if file.endswith(('.webm', '.mp4')):  # Adjust video extensions if necessary
-            video_file = os.path.join("./tmp", file)
-        if file.startswith("audio"):  # Assume the audio file starts with 'audio' and has any extension
-            audio_file = os.path.join("./tmp", file)
-
-    if not video_file or not audio_file:
-        append_to_console("Error: Video or audio file is missing.", error=True)
-        return
-
-    base_filename = os.path.basename(video_file).replace('.webm', '').replace('.mp4', '')
-    final_output = get_unique_filename(os.path.join(folder_path, f"{base_filename}.mp4"))
-
-    total_duration = get_total_duration(video_file)
-
-    command = [
-        FFMPEG_BIN, '-fflags', '+genpts', '-i', video_file, '-i', audio_file,
-        '-c:v', 'copy', '-c:a', 'aac', '-strict', 'experimental', final_output
-    ]
-    process = subprocess.Popen(command, stdout= subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-
-    # Create a queue to hold stdout and stderr lines
-    q = queue.Queue()
-    threading.Thread(target=enqueue_output, args=(process.stderr, process.stdout,q)).start()
-
-    while True:
-        try:
-            line = q.get_nowait()
-            print(line)
-        except queue.Empty:
-            if process.poll() is not None:  # Process has finished
+    def enqueue_output(self, out, stdout, queue):
+        for line in iter(out.readline, b''):
+            if(self.process.poll() is not None):
                 break
-            if cancel_flag.is_set():  # Check if cancellation was requested
-                process.terminate()
-                append_to_console("Merging stopped.")
-                download_button.configure(text="Download")
-
-                if os.path.exists(video_file):
-                    os.remove(video_file)
-                if os.path.exists(audio_file):
-                    os.remove(audio_file)
-                #reset_ui()
-                return
-            else:
-                root.update()  # Keep the UI responsive
-                continue
-
-        #append_to_console(line.strip())
-        if "time=" in line:
-            time_str = line.split("time=")[1].split(" ")[0]
-            if time_str != 'N/A':
-                hours, minutes, seconds = map(float, time_str.split(":"))
-                current_seconds = hours * 3600 + minutes * 60 + seconds
-                percentage = int((current_seconds / total_duration) * 100)
-                if percentage != old_percetage:
-                    append_to_console(f"Merging Progress: {percentage}%")
-                old_percetage = percentage
-
-    process.wait()
-    if os.path.exists(final_output):
-        append_to_console(f"Merging complete!")
-    else:
-        append_to_console("Error: Merging failed.", error=True)
-
-
-    if os.path.exists(video_file):
-        os.remove(video_file)
-    if os.path.exists(audio_file):
-        os.remove(audio_file)
-
-def enqueue_output(out, stdout, queue):
-
-    for line in iter(out.readline, b''):
-        print(line)
-        queue.put(line)
-    print(stdout)
-    out.close()
-
-def convert_to_mp4_from_webm(webm_file, folder_path):
-    append_to_console("Converting to MP4...")
-    append_to_console("It may take a while...")
-    root.update_idletasks()
-    old_percetage = -1
-
-    mp4_file = webm_file.replace('.webm', '.mp4')
-    mp4_file = get_unique_filename(os.path.join(folder_path, mp4_file))
-
-    total_duration = get_total_duration(webm_file)
-
-    command = [
-        FFMPEG_BIN, '-fflags', '+genpts',
-        '-i', webm_file, '-r', '60', mp4_file,
-    ]
-    process = subprocess.Popen(command, stdout= subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-
-    # Create a queue to hold stdout and stderr lines
-    q = queue.Queue()
-    threading.Thread(target=enqueue_output, args=(process.stderr, process.stdout,q)).start()
-
-    while True:
-        try:
-            line = q.get_nowait()
             print(line)
-        except queue.Empty:
-            if process.poll() is not None:  # Process has finished
-                break
-            if cancel_flag.is_set():  # Check if cancellation was requested
-                process.terminate()
-                append_to_console("Conversion stopped.")
-                download_button.configure(text="Download")
+            queue.put(line)
+        print(stdout)
+        out.close()
 
-                if os.path.exists(mp4_file):
-                    os.remove(mp4_file)
-                if os.path.exists(webm_file):
-                    os.remove(webm_file)
-                #reset_ui()
-                return
-            else:
-                root.update()  # Keep the UI responsive
-                continue
+    def convert_to_mp4_from_webm(self, webm_file, folder_path):
+        self.append_to_console("Converting to MP4...")
+        self.append_to_console("It may take a while...")
+        self.disable_ui()
+        filename = os.path.basename(webm_file)
+        mp4_file = filename.replace('.webm', '.mp4')
+        mp4_file = self.get_unique_filename(os.path.join(folder_path, mp4_file))
 
-        #append_to_console(line.strip())
-        if "time=" in line:
-            time_str = line.split("time=")[1].split(" ")[0]
-            if time_str != 'N/A':
-                hours, minutes, seconds = map(float, time_str.split(":"))
-                current_seconds = hours * 3600 + minutes * 60 + seconds
-                percentage = int((current_seconds / total_duration) * 100)
-                if percentage != old_percetage:
-                    append_to_console(f"Conversion Progress: {percentage}%")
-                old_percetage = percentage
+        total_duration = self.get_total_duration(webm_file)
 
-    process.wait()
+        command = [
+            FFMPEG_BIN, '-fflags', '+genpts',
+            '-i', webm_file, '-r', '60', mp4_file,
+        ]
+        self.process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
-    if os.path.exists(mp4_file):
-        append_to_console(f"Done!")
-    if os.path.exists(webm_file):
-        os.remove(webm_file)  # Remove the original file
-       # append_to_console(f"Original file {webm_file} removed")
+        q = queue.Queue()
+        self.enqueue = threading.Thread(target=self.enqueue_output, args=(self.process.stderr, self.process.stdout, q))
+        self.enqueue.start()
 
-def get_total_duration(file_path):
-    command = [FFPROBE_BIN, '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', file_path]
-    result = subprocess.run(command, capture_output=True, text=True)
-    return float(result.stdout.strip())
+        old_percentage = -1
+        while True:
+            try:
+                line = q.get_nowait()
+                print(line)
+            except queue.Empty:
+                if self.process.poll() is not None:
+                    break
+                if self.cancel_flag.is_set():
+                    self.process.terminate()
+                    self.append_to_console("Conversion stopped.")
+                    self.download_button.text = "Download"
+                    self.delete_files_in_folder()
+                    return
+                else:
+                    time.sleep(0.1)
+                    continue
 
-def convert_to_mp3_from_webm(webm_file, folder_path):
-    append_to_console("Converting to MP3...")
-    append_to_console("It may take a while...")
-    root.update_idletasks()
-    old_percetage = -1
+            if "time=" in line:
+                time_str = line.split("time=")[1].split(" ")[0]
+                if time_str != 'N/A':
+                    hours, minutes, seconds = map(float, time_str.split(":"))
+                    current_seconds = hours * 3600 + minutes * 60 + seconds
+                    percentage = int((current_seconds / total_duration) * 100)
+                    if percentage != old_percentage:
+                        self.pb.value = percentage/100
+                        self.pb_headline.value = f"Conversion {int(percentage)}%"
+                        self.append_to_console(f"Conversion Progress: {percentage}%")
+                        self.page.update()
+                    old_percentage = percentage
 
-    mp3_file = webm_file.replace('.webm', '.mp3')
-    mp3_file = get_unique_filename(os.path.join(folder_path, mp3_file))
-    total_duration = get_total_duration(webm_file)
+        self.process.wait()
+        self.process.terminate()
 
-    command = [
-        FFMPEG_BIN,
-        '-i', webm_file,
-        mp3_file
-    ]
+        if os.path.exists(mp4_file):
+            self.append_to_console(f"Done!")
+        #self.delete_files_in_folder()
+        if os.path.exists(webm_file):
+            os.remove(webm_file)
 
-    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    def get_total_duration(self, file_path):
+        command = [FFPROBE_BIN, '-v', 'error', '-show_entries', 'format=duration',
+                  '-of', 'default=noprint_wrappers=1:nokey=1', file_path]
+        result = subprocess.run(command, capture_output=True, text=True)
+        return float(result.stdout.strip())
 
-    # Create a queue to hold stdout and stderr lines
-    q = queue.Queue()
-    threading.Thread(target=enqueue_output, args=(process.stderr,  process.stdout,q)).start()
+    def convert_to_mp3_from_webm(self, webm_file, folder_path):
+        self.append_to_console("Converting to MP3...")
+        self.append_to_console("It may take a while...")
+        filename = os.path.basename(webm_file)
+        mp3_file = filename.replace('.webm', '.mp3')
+        mp3_file = self.get_unique_filename(os.path.join(folder_path, mp3_file))
+        total_duration = self.get_total_duration(webm_file)
 
-    while True:
-        try:
-            line = q.get_nowait()
-            print(line)
-        except queue.Empty:
-            if process.poll() is not None:  # Process has finished
-                break
-            if cancel_flag.is_set():  # Check if cancellation was requested
-                process.terminate()
-                append_to_console("Conversion stopped.")
-                download_button.configure(text="Download")
+        command = [
+            FFMPEG_BIN,
+            '-i', webm_file,
+            mp3_file
+        ]
 
-                if os.path.exists(mp3_file):
-                    os.remove(mp3_file)
-                if os.path.exists(webm_file):
-                    os.remove(webm_file)
-                #reset_ui()
-                return
-            else:
-                root.update()  # Keep the UI responsive
-                continue
+        self.process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
-        #append_to_console(line.strip())
-        if "time=" in line:
-            time_str = line.split("time=")[1].split(" ")[0]
-            if time_str != 'N/A':
-                hours, minutes, seconds = map(float, time_str.split(":"))
-                current_seconds = hours * 3600 + minutes * 60 + seconds
-                percentage = int((current_seconds / total_duration) * 100)
-                if percentage != old_percetage:
-                    append_to_console(f"Conversion Progress: {percentage}%")
-                old_percetage = percentage
+        q = queue.Queue()
+        self.queueue = threading.Thread(target=self.enqueue_output, args=(self.process.stderr, self.process.stdout, q))
+        self.queueue.start()
 
-    process.wait()
-    if os.path.exists(mp3_file):
-        append_to_console(f"Done!")
-    if os.path.exists(webm_file):
-        os.remove(webm_file)  # Remove the original file
-       # append_to_console(f"Original file {webm_file} removed")
+        old_percentage = -1
+        while True:
+            try:
+                line = q.get_nowait()
+                print(line)
+            except queue.Empty:
+                if self.process.poll() is not None:
+                    break
+                if self.cancel_flag.is_set():
+                    self.process.terminate()
+                    self.append_to_console("Conversion stopped.")
+                    self.download_button.text = "Download"
+                    self.delete_files_in_folder()
+                    return
+                else:
+                    time.sleep(0.1)
+                    continue
 
-def convert_to_mp3_from_mp4(mp4_file,folder_path):
-    append_to_console("Converting to MP3...")
-    append_to_console("It may take a while...")
-    root.update_idletasks()
-    old_percetage = -1
+            if "time=" in line:
+                time_str = line.split("time=")[1].split(" ")[0]
+                if time_str != 'N/A':
+                    hours, minutes, seconds = map(float, time_str.split(":"))
+                    current_seconds = hours * 3600 + minutes * 60 + seconds
+                    percentage = int((current_seconds / total_duration) * 100)
+                    if percentage != old_percentage:
+                        self.pb.value = percentage/100
+                        self.pb_headline.value = f"Conversion {int(percentage)}%"
+                        self.append_to_console(f"Conversion Progress: {percentage}%")
+                        self.page.update()
+                    old_percentage = percentage
 
-    mp3_file = mp4_file.replace('.mp4', '.mp3')
-    mp3_file = get_unique_filename(os.path.join(folder_path, mp4_file))
-    total_duration = get_total_duration(mp4_file)
+        self.process.wait()
+        self.process.terminate()
+        if os.path.exists(mp3_file):
+            self.append_to_console(f"Done!")
+        if os.path.exists(webm_file):
+            os.remove(webm_file)
 
-    command = [
-        FFMPEG_BIN,
-        '-i', mp4_file,
-        mp3_file
-    ]
+    def convert_to_mp3_from_mp4(self, mp4_file, folder_path):
+        self.append_to_console("Converting to MP3...")
+        self.append_to_console("It may take a while...")
+        filename = os.path.basename(mp4_file)
+        mp3_file = filename.replace('.mp4', '.mp3')
+        mp3_file = self.get_unique_filename(os.path.join(folder_path, mp3_file))
+        total_duration = self.get_total_duration(mp4_file)
 
-    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        command = [
+            FFMPEG_BIN,
+            '-i', mp4_file,
+            mp3_file
+        ]
 
-    # Create a queue to hold stdout and stderr lines
-    q = queue.Queue()
-    threading.Thread(target=enqueue_output, args=(process.stderr,  process.stdout,q)).start()
+        self.process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
-    while True:
-        try:
-            line = q.get_nowait()
-            print(line)
-        except queue.Empty:
-            if process.poll() is not None:  # Process has finished
-                break
-            if cancel_flag.is_set():  # Check if cancellation was requested
-                process.terminate()
-                append_to_console("Conversion stopped.")
-                download_button.configure(text="Download")
+        q = queue.Queue()
+        self.queueue = threading.Thread(target=self.enqueue_output, args=(self.process.stderr, self.process.stdout, q))
+        self.queueue.start()
+        old_percentage = -1
+        while True:
+            try:
+                line = q.get_nowait()
+                print(line)
+            except queue.Empty:
+                if self.process.poll() is not None:
+                    break
+                if self.cancel_flag.is_set():
+                    self.process.terminate()
+                    self.append_to_console("Conversion stopped.")
+                    self.download_button.text = "Download"
+                    self.delete_files_in_folder()
+                    return
+                else:
+                    time.sleep(0.1)
+                    continue
 
-                if os.path.exists(mp3_file):
-                    os.remove(mp3_file)
-                if os.path.exists(mp4_file):
-                    os.remove(mp4_file)
-                return
-            else:
-                root.update()  # Keep the UI responsive
-                continue
+            if "time=" in line:
+                time_str = line.split("time=")[1].split(" ")[0]
+                if time_str != 'N/A':
+                    hours, minutes, seconds = map(float, time_str.split(":"))
+                    current_seconds = hours * 3600 + minutes * 60 + seconds
+                    percentage = int((current_seconds / total_duration) * 100)
+                    if percentage != old_percentage:
+                        self.pb.value = percentage/100
+                        self.pb_headline.value = f"Conversion {int(percentage)}%"
+                        self.append_to_console(f"Conversion Progress: {percentage}%")
+                    old_percentage = percentage
 
-        #append_to_console(line.strip())
-        if "time=" in line:
-            time_str = line.split("time=")[1].split(" ")[0]
-            if time_str != 'N/A':
-                hours, minutes, seconds = map(float, time_str.split(":"))
-                current_seconds = hours * 3600 + minutes * 60 + seconds
-                percentage = int((current_seconds / total_duration) * 100)
-                if percentage != old_percetage:
-                    append_to_console(f"Conversion Progress: {percentage}%")
-                old_percetage = percentage
+        self.process.wait()
+        self.process.terminate()
+        if os.path.exists(mp3_file):
+            self.append_to_console(f"Done!")
+        if os.path.exists(mp4_file):
+            os.remove(mp4_file)
 
-    process.wait()
-    if os.path.exists(mp3_file):
-        append_to_console(f"Done!")
-    if os.path.exists(mp4_file):
-        os.remove(mp4_file)  # Remove the original file
-       # append_to_console(f"Original file {webm_file} removed")
-
-def on_progress_callback(stream, chunk, bytes_remaining):
-    total_size = stream.filesize
-    bytes_downloaded = total_size - bytes_remaining
-    percentage_of_completion = bytes_downloaded / total_size * 100
-    append_to_console(f"Downloading... {int(percentage_of_completion)}%")
-
-def append_to_console(message, error=False):
-    console_text.configure(state="normal")
-
-    if error:
-        console_text.insert(ctk.END, message + "\n", "error")
-    else:
-        console_text.insert(ctk.END, message + "\n")
-
-    console_text.tag_config("error", foreground="red")
-    console_text.configure(state="disabled")
-    console_text.yview(ctk.END)
-
-def center_window(window, width, height):
-    # Get the screen width and height
-    screen_width = window.winfo_screenwidth()
-    screen_height = window.winfo_screenheight()
-
-    # Calculate position x, y coordinates
-    x = (screen_width // 2) - (width // 2)
-    y = (screen_height // 2) - (height // 2)
-
-    # Set the window size and position
-    window.geometry(f'{width}x{height}+{x}+{y}')
-# Create the main window
-root = ctk.CTk()
-root.title("VidDownloader")
-root.geometry('520x600')  # Increased size of the window
-root.resizable(False, False)  # Make window non-resizable
-center_window(root, 520, 600)
-
-# Create the URL entry
-url_label = ctk.CTkLabel(root, text="YouTube URL:")
-url_label.grid(column=0, row=1, padx=10, pady=10, sticky="w")
-url_entry = ctk.CTkEntry(root, width=350)
-url_entry.grid(column=1, row=1, padx=10, pady=10, sticky="ew")
-
-# Video/Audio selection radio buttons
-video_audio_var = ctk.StringVar(value="Video")
-
-# Radio buttons for selecting between Video with audio and Audio only
-video_radio = ctk.CTkRadioButton(root, text="Video with audio", variable=video_audio_var, value="Video", command=lambda: on_video_audio_change("Video"))
-audio_radio = ctk.CTkRadioButton(root, text="Audio only", variable=video_audio_var, value="Audio", command=lambda: on_video_audio_change("Audio"))
-
-# Placing the radio buttons in the grid with adjusted columnspan and padx for centering
-video_radio.grid(row=0, column=1, columnspan=3, padx=10, pady=10, sticky="we")
-audio_radio.grid(row=0, column=2, columnspan=3, padx=10, pady=10, sticky="we")
-
-# Fetch video info button
-fetch_info_button = ctk.CTkButton(root, text="Fetch Info", command=fetch_video_info)
-fetch_info_button.grid(column=2, row=1, padx=10, pady=10, sticky="ew")
-
-# Create the info_frame initially hidden
-info_frame = ctk.CTkFrame(root)
-info_frame.grid(row=4, column=0, columnspan=3, padx=10, pady=10, sticky="nsew")
-info_frame.grid_columnconfigure(0, weight=1)
-info_frame.grid_columnconfigure(1, weight=1)
-
-# Create and place the widgets within info_frame
-
-thumbnail_label = ctk.CTkLabel(info_frame, text="Thumbnail Placeholder", anchor="center")
-thumbnail_label.grid(row=0, column=0, rowspan=3, padx=10, pady=10, sticky="nsew")
-
-video_name_label = ctk.CTkLabel(info_frame, text="Video name: N/A", anchor="w")
-video_name_label.grid(row=0, column=1, padx=10, pady=5, sticky="w")
-
-size_label = ctk.CTkLabel(info_frame, text="Download size: N/A", anchor="w")
-size_label.grid(row=1, column=1, padx=10, pady=5, sticky="w")
-
-duration_label = ctk.CTkLabel(info_frame, text="Duration: N/A", anchor="w")
-duration_label.grid(row=2, column=1, padx=10, pady=5, sticky="w")
-
-# Create the resolution dropdown
-resolution_label = ctk.CTkLabel(root, text="Resolution:")
-resolution_label.grid(row=6, column=0, padx=10, pady=10, sticky="w")
-resolution_combobox = ctk.CTkComboBox(root, state="disabled", command=on_resolution_selected)
-resolution_combobox.set("Select a resolution")
-resolution_combobox.grid(row=6, column=1, padx=10, pady=10, sticky="ew")
-add_audio_var = ctk.StringVar(value="on")  # Default value set to "on" (checked)
-add_audio_checkbox = ctk.CTkCheckBox(root,  text="with Audio", onvalue="on", offvalue="off", variable=add_audio_var)
-add_audio_checkbox.grid(row = 6, column = 2, padx=10, pady=10, sticky="ew")
+    def convert_to_mp3_from_m4a(self, mp4_file, folder_path):
+        self.append_to_console("Converting to MP3...")
+        self.append_to_console("It may take a while...")
+        filename = os.path.basename(mp4_file)
+        mp3_file = filename.replace('.m4a', '.mp3')
+        mp3_file = self.get_unique_filename(os.path.join(folder_path, mp3_file))
 
 
-# Create the folder selection
-folder_label = ctk.CTkLabel(root, text="Download Folder:")
-folder_label.grid(row=7, column=0, padx=10, pady=10, sticky="w")
-folder_entry = ctk.CTkEntry(root, width=350, state="normal")
-folder_entry.grid(row=7, column=1, padx=10, pady=10, sticky="ew")
-folder_button = ctk.CTkButton(root, text="Browse", command=browse_folder, state="disabled")
-folder_button.grid(row=7, column=2, padx=10, pady=10, sticky="ew")
+        total_duration = self.get_total_duration(mp4_file)
 
-# Create the download button
-download_button = ctk.CTkButton(root, text="Download", command=toggle_download, state="disabled")
-download_button.grid(row=8, column=0, columnspan=3, padx=10, pady=20, sticky="ew")
+        command = [
+            FFMPEG_BIN,
+            '-i', mp4_file,
+            mp3_file
+        ]
 
-# Create the console area
-console_frame = ctk.CTkFrame(root)
-console_frame.grid(row=9, column=0, columnspan=3, padx=10, pady=10, sticky="nsew")
-console_title = ctk.CTkLabel(console_frame, text="Console", font=("Arial", 12, "bold"))
-console_title.pack(anchor="w", padx=5, pady=5)
-console_text = ctk.CTkTextbox(console_frame, height=5, width=60, state="disabled")
-console_text.pack(side="left", fill="both", expand=True, padx=5, pady=5)
+        self.process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
-# Adjust column weights for resizing
-root.grid_columnconfigure(1, weight=1)
-root.grid_rowconfigure(9, weight=1)  # Allow console row to expand
-info_frame.grid_forget()
-# Run the application
-root.mainloop()
+        q = queue.Queue()
+        self.queueue = threading.Thread(target=self.enqueue_output, args=(self.process.stderr, self.process.stdout, q))
+        self.queueue.start()
+        old_percentage = -1
+        while True:
+            try:
+                line = q.get_nowait()
+                print(line)
+            except queue.Empty:
+                if self.process.poll() is not None:
+                    break
+                if self.cancel_flag.is_set():
+                    self.process.terminate()
+                    self.append_to_console("Conversion stopped.")
+                    self.download_button.text = "Download"
+                    self.delete_files_in_folder()
+                    return
+                else:
+                    time.sleep(0.1)
+                    continue
+
+            if "time=" in line:
+                time_str = line.split("time=")[1].split(" ")[0]
+                if time_str != 'N/A':
+                    hours, minutes, seconds = map(float, time_str.split(":"))
+                    current_seconds = hours * 3600 + minutes * 60 + seconds
+                    percentage = int((current_seconds / total_duration) * 100)
+                    if percentage != old_percentage:
+                        self.pb.value = percentage/100
+                        self.pb_headline.value = f"Conversion {int(percentage)}%"
+                        self.append_to_console(f"Conversion Progress: {percentage}%")
+                        self.page.update()
+                    old_percentage = percentage
+
+        self.process.wait()
+        self.process.terminate()
+        if os.path.exists(mp3_file):
+            self.append_to_console(f"Done!")
+        if os.path.exists(mp4_file):
+            os.remove(mp4_file)
+
+    def on_progress_callback(self, stream, chunk, bytes_remaining):
+        total_size = stream.filesize
+        bytes_downloaded = total_size - bytes_remaining
+        percentage_of_completion = bytes_downloaded / total_size * 100
+        self.pb.value = percentage_of_completion/100
+        self.pb_headline.value = f"Downloading {int(percentage_of_completion)}%"
+        self.page.update()
+        self.append_to_console(f"Downloading... {int(percentage_of_completion)}%")
+
+    def append_to_console(self, message, error=False):
+        color = ft.colors.RED if error else None
+        self.console_text.controls.append(ft.Text(message, color=color))
+        self.page.update()
+
+def main(page: ft.Page):
+    app = VidDownloaderApp(page)
+
+ft.app(target=main)
