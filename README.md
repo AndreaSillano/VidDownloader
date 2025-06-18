@@ -24,7 +24,7 @@ VVidDownloader is a simple desktop application that acts as a UI wrapper for `py
 ### Clone the Repository
 
 ```bash
-git clone https://github.com/yourusername/VidDownloader.git
+git clone https://github.com/AndreaSillano/VidDownloader.git
 cd VidDownloader
 ```
 
