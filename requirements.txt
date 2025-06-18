@@ -4,4 +4,4 @@ customtkinter==5.2.2
 requests==2.32.0
 pillow==10.4.0
 setuptools==70.3.0
-flet==0.28.3
+flet==0.27.6

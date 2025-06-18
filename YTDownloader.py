@@ -180,7 +180,7 @@ class VidDownloaderApp:
                 self.last_row,
                 ft.Container(
                     content=self.console_text,
-                    border=ft.border.all(1, ft.colors.GREY_400),
+                    border=ft.border.all(1, ft.Colors.GREY_400),
                     padding=5,
                     border_radius=5,
                     visible=False
@@ -986,7 +986,7 @@ class VidDownloaderApp:
         self.append_to_console(f"Downloading... {int(percentage_of_completion)}%")
 
     def append_to_console(self, message, error=False):
-        color = ft.colors.RED if error else None
+        color = ft.Colors.RED if error else None
         self.console_text.controls.append(ft.Text(message, color=color))
         self.page.update()
 
